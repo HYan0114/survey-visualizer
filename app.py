@@ -143,44 +143,48 @@ def main():
     st.set_page_config(page_title="測量可視化助手", layout="wide")
 
     st.title("📐 測量可視化助手")
+    st.caption("使用 Excel 計算模板，自動繪製平面與三維坐標圖")
+
+    # === 模板下載 ===
     st.subheader("下載 Excel 計算模板")
+    try:
+        with open("calculation template.xlsx", "rb") as f:
+            st.download_button(
+                label="📥 點我下載計算模板",
+                data=f,
+                file_name="calculation_template.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+    except:
+        st.warning("⚠ 找不到 calculation template.xlsx，請確認檔案有放在同一資料夾。")
 
-with open("calculation template.xlsx", "rb") as f:
-    st.download_button(
-        label="📥 點我下載計算模板",
-        data=f,
-        file_name="calculation_template.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
-    st.caption("使用你的 Excel 計算模板，自動繪製平面與三維座標圖")
-
+    # === 上傳 Excel ===
     uploaded_file = st.file_uploader(
-        "請上傳使用『計算模板』填好的 Excel 檔 (.xlsx)",
-        type=["xlsx"],
+        "請上傳依照模板填寫好的 Excel 檔 (.xlsx)",
+        type=["xlsx"]
     )
 
     show_labels = st.checkbox("顯示點號標籤", value=True)
 
     if uploaded_file is None:
-        st.info("請先上傳一個 Excel 檔案。")
-        return
+        st.info("請先上傳 Excel 檔案")
+        return   # ← 在 main() 裡，合法
 
+    # === 讀細部點 ===
     try:
-        # 讀兩個工作表
         detail_df = load_points(uploaded_file, SHEET_DETAIL)
     except Exception as e:
         st.error(f"讀取細部點座標失敗：{e}")
-        return
+        return   # ← 仍在 main() 裡，合法
 
-    # 控制點可選
+    # === 讀控制點 ===
     try:
         control_df = load_points(uploaded_file, SHEET_CONTROL)
-    except Exception:
+    except:
         control_df = pd.DataFrame()
-        st.warning("找不到控制點工作表或欄位，將只顯示細部點。")
+        st.warning("⚠ 未找到控制點工作表或欄位，只顯示細部點。")
 
-    # 顯示資料表
+    # === 顯示資料表 ===
     st.subheader("細部點座標表")
     st.dataframe(detail_df)
 
@@ -188,7 +192,7 @@ with open("calculation template.xlsx", "rb") as f:
         st.subheader("控制點座標表")
         st.dataframe(control_df)
 
-    # 繪圖（左右兩欄）
+    # === 繪圖 ===
     col1, col2 = st.columns(2)
 
     with col1:
@@ -200,8 +204,4 @@ with open("calculation template.xlsx", "rb") as f:
         st.subheader("三維圖 (E–N–H)")
         fig_3d = plot_3d(detail_df, control_df, show_labels=False)
         st.pyplot(fig_3d)
-
-
-if __name__ == "__main__":
-    main()
 
