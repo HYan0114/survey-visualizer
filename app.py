@@ -85,7 +85,7 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
     )
 
     fig.update_layout(
-        title="平面圖：細部點 + 控制點（可滑鼠放大）",
+        title="平面圖：細部點 + 控制點（可用滑鼠/雙指拖曳放大）",
         xaxis_title="E (m)",
         yaxis_title="N (m)",
         yaxis_scaleanchor="x",  # 保持比例 1:1
@@ -251,3 +251,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
