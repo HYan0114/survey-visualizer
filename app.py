@@ -1,17 +1,16 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D  # 啟用 3D 投影用的
+import matplotlib.pyplot as plt  # 只留著以後備用
+from mpl_toolkits.mplot3d import Axes3D  # 目前沒用到，但保留
+import plotly.express as px
 
 # ==========================
 # 基本設定（依照你的 Excel 模板）
 # ==========================
 
-# 工作表名稱
 SHEET_DETAIL = "細部點座標"
-SHEET_CONTROL = "控制點 (ControlPoints)"  # 如果你後來改成「控制點」，就改成 "控制點"
+SHEET_CONTROL = "控制點 (ControlPoints)"  # 如果工作表叫「控制點」，改成 "控制點"
 
-# 欄位名稱
 COL_POINT = "點號"
 COL_N = "N座標"
 COL_E = "E座標"
@@ -34,131 +33,137 @@ def load_points(xls, sheet_name: str) -> pd.DataFrame:
         if col not in df.columns:
             raise KeyError(f"在工作表「{sheet_name}」找不到欄位：{col}")
 
-    # 去除 N/E/H 為空的列
-    df_clean = df.dropna(subset=[COL_N, COL_E, COL_H])
-    return df_clean
-
-
-def set_equal_3d_axes(ax, x, y, z):
-    """讓 3D 圖比例一致（x, y, z 為 pandas Series）"""
-    x_min, x_max = x.min(), x.max()
-    y_min, y_max = y.min(), y.max()
-    z_min, z_max = z.min(), z.max()
-
-    max_range = max(x_max - x_min, y_max - y_min, z_max - z_min) / 2.0
-
-    x_mid = (x_max + x_min) / 2.0
-    y_mid = (y_max + y_min) / 2.0
-    z_mid = (z_max + z_min) / 2.0
-
-    ax.set_xlim(x_mid - max_range, x_mid + max_range)
-    ax.set_ylim(y_mid - max_range, y_mid + max_range)
-    ax.set_zlim(z_mid - max_range, z_mid + max_range)
+    return df  # 不在這裡 dropna，畫圖前再處理
 
 
 # ==========================
-# 繪圖：平面圖 (N–E)
+# 繪圖：平面圖 (N–E) - 使用 plotly，可放大
 # ==========================
 
-def plot_plan(detail_df: pd.DataFrame,
-              control_df: pd.DataFrame | None = None,
-              show_labels: bool = True):
-    """平面 N–E 圖：細部點 + 控制點"""
+def plot_plan_interactive(detail_df: pd.DataFrame,
+                          control_df: pd.DataFrame | None = None,
+                          show_labels: bool = True):
+    """平面 N–E 圖（plotly 版，可放大）"""
 
-    fig, ax = plt.subplots()
+    # 只取有 N/E 的點
+    detail_valid = detail_df.dropna(subset=[COL_N, COL_E]) if detail_df is not None else pd.DataFrame()
+    control_valid = control_df.dropna(subset=[COL_N, COL_E]) if (control_df is not None and not control_df.empty) else pd.DataFrame()
 
-    # 細部點
-    if detail_df is not None and not detail_df.empty:
-        x = detail_df[COL_E]
-        y = detail_df[COL_N]
-        labels = detail_df[COL_POINT].astype(str)
+    # 組合兩種點成一個 DataFrame，方便 plotly 上色
+    frames = []
+    if not detail_valid.empty:
+        df_d = detail_valid.copy()
+        df_d["點類型"] = "細部點"
+        frames.append(df_d)
+    if not control_valid.empty:
+        df_c = control_valid.copy()
+        df_c["點類型"] = "控制點"
+        frames.append(df_c)
 
-        ax.scatter(x, y, s=10, marker="o", label="細部點")
-        if show_labels:
-            for xi, yi, label in zip(x, y, labels):
-                ax.text(xi, yi, label, fontsize=6)
+    if not frames:
+        return None
 
-    # 控制點
-    if control_df is not None and not control_df.empty:
-        x = control_df[COL_E]
-        y = control_df[COL_N]
-        labels = control_df[COL_POINT].astype(str)
+    all_points = pd.concat(frames, ignore_index=True)
 
-        ax.scatter(x, y, s=40, marker="^", label="控制點")
-        if show_labels:
-            for xi, yi, label in zip(x, y, labels):
-                ax.text(xi, yi, label, fontsize=7, fontweight="bold")
+    # hover 資訊
+    hover_data = {
+        COL_POINT: True,
+        COL_N: True,
+        COL_E: True,
+        COL_H: True,
+        "點類型": True,
+    }
 
-    ax.set_xlabel("E (m)")
-    ax.set_ylabel("N (m)")
-    ax.set_aspect("equal", adjustable="box")
-    ax.set_title("平面圖：細部點 + 控制點")
-    ax.legend()
+    fig = px.scatter(
+        all_points,
+        x=COL_E,
+        y=COL_N,
+        color="點類型",
+        hover_name=COL_POINT,
+        hover_data=hover_data,
+        symbol="點類型",
+    )
 
-    fig.tight_layout()
+    fig.update_layout(
+        title="平面圖：細部點 + 控制點（可滑鼠放大）",
+        xaxis_title="E (m)",
+        yaxis_title="N (m)",
+        yaxis_scaleanchor="x",  # 保持比例 1:1
+        legend_title="點類型",
+        height=600,
+    )
+
+    # 如果不要在圖上顯示標籤，只保留 hover
+    if not show_labels:
+        return fig
+
+    # 顯示固定標籤（在點旁邊印點號）
+    fig.update_traces(
+        text=all_points[COL_POINT],
+        textposition="top center",
+        textfont=dict(size=9),
+        mode="markers+text",
+    )
+
     return fig
 
 
 # ==========================
-# 繪圖：三維圖 (E–N–H)
+# 繪圖：三維圖 (E–N–H) - 使用 plotly，可放大旋轉
 # ==========================
 
-def plot_3d(detail_df: pd.DataFrame,
-            control_df: pd.DataFrame | None = None,
-            show_labels: bool = False):
-    """三維圖：細部點 + 控制點"""
+def plot_3d_interactive(detail_df: pd.DataFrame,
+                        control_df: pd.DataFrame | None = None):
+    """三維圖：細部點 + 控制點（plotly 版，可旋轉、放大）"""
 
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection="3d")
+    detail_valid = detail_df.dropna(subset=[COL_N, COL_E, COL_H]) if detail_df is not None else pd.DataFrame()
+    control_valid = control_df.dropna(subset=[COL_N, COL_E, COL_H]) if (control_df is not None and not control_df.empty) else pd.DataFrame()
 
-    xs, ys, zs = [], [], []
+    frames = []
+    if not detail_valid.empty:
+        df_d = detail_valid.copy()
+        df_d["點類型"] = "細部點"
+        frames.append(df_d)
+    if not control_valid.empty:
+        df_c = control_valid.copy()
+        df_c["點類型"] = "控制點"
+        frames.append(df_c)
 
-    # 細部點
-    if detail_df is not None and not detail_df.empty:
-        x = detail_df[COL_E]
-        y = detail_df[COL_N]
-        z = detail_df[COL_H]
-        labels = detail_df[COL_POINT].astype(str)
+    if not frames:
+        return None
 
-        ax.scatter(x, y, z, s=10, marker="o", label="細部點")
-        if show_labels:
-            for xi, yi, zi, label in zip(x, y, z, labels):
-                ax.text(xi, yi, zi, label, fontsize=6)
+    all_points = pd.concat(frames, ignore_index=True)
 
-        xs.append(x)
-        ys.append(y)
-        zs.append(z)
+    hover_data = {
+        COL_POINT: True,
+        COL_N: True,
+        COL_E: True,
+        COL_H: True,
+        "點類型": True,
+    }
 
-    # 控制點
-    if control_df is not None and not control_df.empty:
-        x = control_df[COL_E]
-        y = control_df[COL_N]
-        z = control_df[COL_H]
-        labels = control_df[COL_POINT].astype(str)
+    fig = px.scatter_3d(
+        all_points,
+        x=COL_E,
+        y=COL_N,
+        z=COL_H,
+        color="點類型",
+        hover_name=COL_POINT,
+        hover_data=hover_data,
+        symbol="點類型",
+    )
 
-        ax.scatter(x, y, z, s=40, marker="^", label="控制點")
-        if show_labels:
-            for xi, yi, zi, label in zip(x, y, z, labels):
-                ax.text(xi, yi, zi, label, fontsize=7, fontweight="bold")
+    fig.update_layout(
+        title="三維圖：細部點 + 控制點（可拖曳旋轉 / 滾輪放大）",
+        scene=dict(
+            xaxis_title="E (m)",
+            yaxis_title="N (m)",
+            zaxis_title="H (m)",
+        ),
+        legend_title="點類型",
+        height=650,
+    )
 
-        xs.append(x)
-        ys.append(y)
-        zs.append(z)
-
-    ax.set_xlabel("E (m)")
-    ax.set_ylabel("N (m)")
-    ax.set_zlabel("H (m)")
-    ax.set_title("三維圖：細部點 + 控制點")
-    ax.legend()
-
-    # 設定等比例
-    if xs:
-        x_all = pd.concat(xs)
-        y_all = pd.concat(ys)
-        z_all = pd.concat(zs)
-        set_equal_3d_axes(ax, x_all, y_all, z_all)
-
-    fig.tight_layout()
     return fig
 
 
@@ -170,7 +175,7 @@ def main():
     st.set_page_config(page_title="測量可視化助手", layout="wide")
 
     st.title("📐 測量可視化助手")
-    st.caption("使用你的 Excel 計算模板，自動繪製平面與三維座標圖")
+    st.caption("使用你的 Excel 計算模板，自動繪製可放大、可旋轉的平面與三維座標圖")
 
     # --- 模板下載 ---
     st.subheader("下載 Excel 計算模板")
@@ -183,7 +188,7 @@ def main():
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
     except FileNotFoundError:
-        st.warning("⚠ 找不到 calculation template.xlsx，請確認檔案有放在與 app.py 同一個資料夾。")
+        st.warning("⚠ 找不到 calculation template.xlsx，請確認檔案有放在與 app.py 同一資料夾。")
 
     st.markdown("---")
 
@@ -194,7 +199,7 @@ def main():
         type=["xlsx"]
     )
 
-    show_labels = st.checkbox("顯示點號標籤", value=True)
+    show_labels = st.checkbox("平面圖顯示點號標籤", value=True)
 
     if uploaded_file is None:
         st.info("請先上傳 Excel 檔案後再進行繪圖。")
@@ -224,18 +229,24 @@ def main():
 
     st.markdown("---")
 
-    # --- 繪圖（左右兩欄） ---
+    # --- 繪圖（左右兩欄，使用 plotly_chart，可以放大） ---
     col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("平面圖 (N–E)")
-        fig_plan = plot_plan(detail_df, control_df, show_labels=show_labels)
-        st.pyplot(fig_plan, clear_figure=True)
+        fig_plan = plot_plan_interactive(detail_df, control_df, show_labels=show_labels)
+        if fig_plan is None:
+            st.warning("沒有有效的細部點 / 控制點可以繪製平面圖。請確認 N/E 座標有計算完成。")
+        else:
+            st.plotly_chart(fig_plan, use_container_width=True)
 
     with col2:
         st.subheader("三維圖 (E–N–H)")
-        fig_3d = plot_3d(detail_df, control_df, show_labels=False)
-        st.pyplot(fig_3d, clear_figure=True)
+        fig_3d = plot_3d_interactive(detail_df, control_df)
+        if fig_3d is None:
+            st.warning("沒有有效的細部點 / 控制點可以繪製三維圖。請確認 N/E/H 座標有計算完成。")
+        else:
+            st.plotly_chart(fig_3d, use_container_width=True)
 
 
 if __name__ == "__main__":
