@@ -143,6 +143,16 @@ def main():
     st.set_page_config(page_title="測量可視化助手", layout="wide")
 
     st.title("📐 測量可視化助手")
+    st.subheader("下載 Excel 計算模板")
+
+with open("calculation template.xlsx", "rb") as f:
+    st.download_button(
+        label="📥 點我下載計算模板",
+        data=f,
+        file_name="calculation_template.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
     st.caption("使用你的 Excel 計算模板，自動繪製平面與三維座標圖")
 
     uploaded_file = st.file_uploader(
@@ -194,3 +204,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
