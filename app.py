@@ -1,15 +1,14 @@
 import re
+import math
+from typing import Dict, Tuple, Optional, List
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 
 # ==========================
-# 基本設定（依照你的 Excel 模板）
+# 基本設定：欄位名稱
 # ==========================
-
-SHEET_DETAIL = "細部點座標"
-SHEET_CONTROL = "控制點 (ControlPoints)"  # 如果工作表叫「控制點」，就改成 "控制點"
 
 COL_POINT = "點號"
 COL_N = "N座標"
@@ -18,22 +17,58 @@ COL_H = "H座標"
 
 
 # ==========================
-# 工具函式：讀取 Excel
+# 自動偵測工作表
 # ==========================
 
-def load_points(xls, sheet_name: str) -> pd.DataFrame:
+def auto_detect_sheets(xls_file) -> Tuple[pd.DataFrame, Optional[pd.DataFrame], str, Optional[str]]:
     """
-    從指定工作表讀取三維座標資料。
-    xls 可以是上傳的檔案物件（streamlit file_uploader 給的）。
+    自動偵測上傳的 Excel 裡：
+      - 哪一張是「細部點」工作表
+      - 哪一張是「控制點」工作表（可有可無）
+
+    規則：
+      1) 只考慮同時擁有 COL_POINT, COL_N, COL_E, COL_H 四欄的工作表
+      2) 工作表名稱包含「細部 / detail」優先當細部點
+         名稱包含「控制 / control」優先當控制點
+      3) 若還是不明，第一個符合條件的當細部點，第二個當控制點（如果有）
+
+    回傳：(detail_df, control_df_or_None, detail_name, control_name_or_None)
     """
-    df = pd.read_excel(xls, sheet_name=sheet_name)
+    xls = pd.ExcelFile(xls_file)
+    candidates: Dict[str, pd.DataFrame] = {}
 
-    # 檢查欄位是否存在
-    for col in [COL_POINT, COL_N, COL_E, COL_H]:
-        if col not in df.columns:
-            raise KeyError(f"在工作表「{sheet_name}」找不到欄位：{col}")
+    for name in xls.sheet_names:
+        df = pd.read_excel(xls, sheet_name=name)
+        if all(c in df.columns for c in [COL_POINT, COL_N, COL_E, COL_H]):
+            candidates[name] = df
 
-    return df  # 不在這裡 dropna，畫圖前再處理
+    if not candidates:
+        raise ValueError("找不到同時包含「點號 / N座標 / E座標 / H座標」欄位的工作表。")
+
+    detail_name = None
+    control_name = None
+
+    # 優先依名稱判斷
+    for name in candidates.keys():
+        lname = name.lower()
+        if detail_name is None and ("細部" in name or "detail" in lname):
+            detail_name = name
+        if control_name is None and ("控制" in name or "control" in lname):
+            control_name = name
+
+    # 仍未決定時，用順序填補
+    names_list = list(candidates.keys())
+    if detail_name is None:
+        detail_name = names_list[0]
+    if control_name is None and len(names_list) >= 2:
+        # 如果第二張不同於細部點，拿第二張
+        if names_list[1] != detail_name:
+            control_name = names_list[1]
+
+    detail_df = candidates[detail_name]
+    control_df = candidates[control_name] if control_name is not None else None
+
+    return detail_df, control_df, detail_name, control_name
 
 
 # ==========================
@@ -79,14 +114,14 @@ def classify_detail_points(detail_df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ==========================
-# 命名工具：從 B 點推算下一個編號，不重複
+# 命名工具：從起始點推算下一個編號，不重複
 # ==========================
 
 def infer_naming_style_and_next_indices(base_name: str,
                                         all_names: pd.Series,
                                         c: int):
     """
-    從 B 點點號推斷命名風格：
+    從起始點點號推斷命名風格：
       - T-1, T-2 -> 產生 T-3, T-4...
       - T1, T2   -> 產生 T3, T4...
     從 all_names 中找出同風格的最大編號，然後連續往後 C 個，保證不重複。
@@ -142,7 +177,6 @@ def infer_naming_style_and_next_indices(base_name: str,
         cur += 1
         candidate = f"{prefix}-{cur}" if style == "hyphen" else f"{prefix}{cur}"
         if candidate in used_names:
-            # 理論上不會常發生，但還是保險一下
             continue
         indices.append(cur)
         used_names.add(candidate)
@@ -151,64 +185,89 @@ def infer_naming_style_and_next_indices(base_name: str,
 
 
 # ==========================
-# 支距法：產生新點（繼承 A/B 類型 & 顏色）
+# 支距法（新邏輯）：以兩點距離 + NESW 方向
 # ==========================
 
-def generate_offset_points(all_points: pd.DataFrame,
-                           point_a: str,
-                           point_b: str,
-                           k: float,
-                           c: int) -> pd.DataFrame:
+def compute_distance(all_points: pd.DataFrame, p1: str, p2: str) -> float:
+    row1 = all_points[all_points[COL_POINT] == p1]
+    row2 = all_points[all_points[COL_POINT] == p2]
+    if row1.empty or row2.empty:
+        raise ValueError("找不到距離基準點。")
+
+    N1, E1 = float(row1[COL_N].iloc[0]), float(row1[COL_E].iloc[0])
+    N2, E2 = float(row2[COL_N].iloc[0]), float(row2[COL_E].iloc[0])
+    dN = N2 - N1
+    dE = E2 - E1
+    return math.sqrt(dN ** 2 + dE ** 2)
+
+
+def generate_offset_points_directional(all_points: pd.DataFrame,
+                                       dist_p1: str,
+                                       dist_p2: str,
+                                       start_point: str,
+                                       direction: str,
+                                       k: float,
+                                       c: int) -> pd.DataFrame:
     """
-    支距法：
-    - 從 A、B 兩點，沿著 AB 方向，自 B 起每次 K 倍 AB 向量，重複 C 次。
-    - 新點點號依據 B 點命名風格，延續編號，不與任何既有點號重複。
-    - 新點的「點類型」：
-        若 A、B 類型相同 -> 使用該類型；
-        若不同 -> 使用 B 的類型。
+    新版支距法：
+      1) 先選兩點 dist_p1, dist_p2 計算距離 D
+      2) 選起始點 start_point
+      3) 選方向 direction ∈ {N, E, S, W}
+      4) 設定 K 倍距離、C 次
+         每一新點與前一點距離 = D * K，方向為 NESW
+
+    新點的點號：
+      - 依起始點 start_point 的命名風格（T-1/T1）往後編
+      - 不與任何既有點號重複
+
+    新點的點類型：
+      - 與起始點相同（顏色和標籤一致）
     """
 
-    # 確保有 "點類型" 欄位（控制點和細部點都應該已設定）
     if "點類型" not in all_points.columns:
         all_points = all_points.copy()
         all_points["點類型"] = "[細部點]"
 
-    row_a = all_points[all_points[COL_POINT] == point_a]
-    row_b = all_points[all_points[COL_POINT] == point_b]
+    # 距離 D
+    D = compute_distance(all_points, dist_p1, dist_p2)
 
-    if row_a.empty or row_b.empty:
-        raise ValueError("找不到指定的點 A 或點 B")
+    # 起始點資訊
+    row_s = all_points[all_points[COL_POINT] == start_point]
+    if row_s.empty:
+        raise ValueError("找不到起始點。")
 
-    Na, Ea, Ha = float(row_a[COL_N].iloc[0]), float(row_a[COL_E].iloc[0]), float(row_a[COL_H].iloc[0])
-    Nb, Eb, Hb = float(row_b[COL_N].iloc[0]), float(row_b[COL_E].iloc[0]), float(row_b[COL_H].iloc[0])
+    Ns, Es, Hs = float(row_s[COL_N].iloc[0]), float(row_s[COL_E].iloc[0]), float(row_s[COL_H].iloc[0])
+    start_type = row_s["點類型"].iloc[0]
+    base_name = str(row_s[COL_POINT].iloc[0])
 
-    dN = Nb - Na
-    dE = Eb - Ea
-    dH = Hb - Ha
-
-    type_a = row_a["點類型"].iloc[0]
-    type_b = row_b["點類型"].iloc[0]
-    if type_a == type_b:
-        new_type = type_a
-    else:
-        # 若 A、B 類型不同，以 B 為主
-        new_type = type_b
-
-    base_name = str(row_b[COL_POINT].iloc[0])
     style, prefix, indices = infer_naming_style_and_next_indices(
         base_name,
         all_points[COL_POINT],
         c
     )
 
+    # 方向單位向量（只考慮平面 N, E）
+    dir_map = {
+        "N": (1.0, 0.0),
+        "S": (-1.0, 0.0),
+        "E": (0.0, 1.0),
+        "W": (0.0, -1.0),
+    }
+    if direction not in dir_map:
+        raise ValueError("方向必須為 N、E、S 或 W。")
+
+    uN, uE = dir_map[direction]
+
     records = []
+    cur_N, cur_E, cur_H = Ns, Es, Hs
 
     for idx in indices:
-        # 注意：這裡 factor 依「第幾個新點」排，跟 idx 數字無關
-        factor = k * (len(records) + 1)
-        Ni = Nb + factor * dN
-        Ei = Eb + factor * dE
-        Hi = Hb + factor * dH
+        # 每一個新點，相對起始點的距離 = (已產生點數 + 1) * D * K
+        step_index = len(records) + 1
+        step = D * k  # 每一段的長度
+        cur_N += uN * step
+        cur_E += uE * step
+        cur_H = Hs  # 預設高度不變
 
         if style == "hyphen":
             pt_name = f"{prefix}-{idx}"
@@ -217,10 +276,10 @@ def generate_offset_points(all_points: pd.DataFrame,
 
         records.append({
             COL_POINT: pt_name,
-            COL_N: Ni,
-            COL_E: Ei,
-            COL_H: Hi,
-            "點類型": new_type,
+            COL_N: cur_N,
+            COL_E: cur_E,
+            COL_H: cur_H,
+            "點類型": start_type,
         })
 
     return pd.DataFrame.from_records(records)
@@ -231,9 +290,10 @@ def generate_offset_points(all_points: pd.DataFrame,
 # ==========================
 
 def plot_plan_interactive(detail_df: pd.DataFrame,
-                          control_df: pd.DataFrame | None = None,
-                          offset_df: pd.DataFrame | None = None,
-                          show_labels: bool = True):
+                          control_df: Optional[pd.DataFrame],
+                          offset_df: Optional[pd.DataFrame],
+                          show_labels: bool,
+                          allowed_types: List[str]):
     """平面 N–E 圖（plotly 版，可放大）"""
 
     # 細部點分類 + 過濾有效
@@ -268,6 +328,11 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
         return None
 
     all_points = pd.concat(frames, ignore_index=True)
+
+    if allowed_types:
+        all_points = all_points[all_points["點類型"].isin(allowed_types)]
+        if all_points.empty:
+            return None
 
     hover_data = {
         COL_POINT: True,
@@ -310,7 +375,7 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
         symbol="點類型",
         hover_name=COL_POINT,
         hover_data=hover_data,
-        text=COL_POINT,              # 🔹 每個點顯示自己點號
+        text=COL_POINT,              # 每個點顯示自己點號
         color_discrete_map=color_map,
         symbol_map=symbol_map,
     )
@@ -331,7 +396,6 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
             mode="markers+text",
         )
     else:
-        # 不顯示文字只保留點
         fig.update_traces(
             text=None,
             mode="markers",
@@ -345,8 +409,9 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
 # ==========================
 
 def plot_3d_interactive(detail_df: pd.DataFrame,
-                        control_df: pd.DataFrame | None = None,
-                        offset_df: pd.DataFrame | None = None):
+                        control_df: Optional[pd.DataFrame],
+                        offset_df: Optional[pd.DataFrame],
+                        allowed_types: List[str]):
     """三維圖：控制點 + 細部點 + 支距點（plotly，可旋轉、放大）"""
 
     if detail_df is not None and not detail_df.empty:
@@ -378,6 +443,11 @@ def plot_3d_interactive(detail_df: pd.DataFrame,
         return None
 
     all_points = pd.concat(frames, ignore_index=True)
+
+    if allowed_types:
+        all_points = all_points[all_points["點類型"].isin(allowed_types)]
+        if all_points.empty:
+            return None
 
     hover_data = {
         COL_POINT: True,
@@ -426,7 +496,7 @@ def plot_3d_interactive(detail_df: pd.DataFrame,
 
     # 3D 互動設定：
     # - camera.up = Z 軸朝上
-    # - dragmode = "turntable"：類似「Z 軸始終向上旋轉」的模式
+    # - dragmode = "turntable"：Z 軸向上旋轉
     fig.update_layout(
         title="三維圖：控制點 + 細部點 + 支距點（可旋轉 / 縮放）",
         scene=dict(
@@ -445,6 +515,48 @@ def plot_3d_interactive(detail_df: pd.DataFrame,
 
 
 # ==========================
+# 匯出 Excel：把目前的細部點 + 控制點 + 支距點寫出去
+# ==========================
+
+def export_to_excel(detail_df: pd.DataFrame,
+                    control_df: Optional[pd.DataFrame],
+                    offset_df: Optional[pd.DataFrame]) -> bytes:
+    """
+    產生一份新的 Excel：
+      - 工作表「細部點座標」：detail_df + offset_df（去掉 點類型 欄位）
+      - 工作表「控制點」：control_df（若有，同樣去掉 點類型）
+    回傳：Excel 檔案的位元組（給 st.download_button 用）
+    """
+    from io import BytesIO
+
+    output = BytesIO()
+
+    # 準備細部點
+    detail_out = detail_df.copy()
+    if "點類型" in detail_out.columns:
+        detail_out = detail_out.drop(columns=["點類型"])
+
+    # 支距點加入細部點
+    if offset_df is not None and not offset_df.empty:
+        offset_out = offset_df.copy()
+        if "點類型" in offset_out.columns:
+            offset_out = offset_out.drop(columns=["點類型"])
+        detail_out = pd.concat([detail_out, offset_out], ignore_index=True)
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        detail_out.to_excel(writer, sheet_name="細部點座標", index=False)
+
+        if control_df is not None and not control_df.empty:
+            control_out = control_df.copy()
+            if "點類型" in control_out.columns:
+                control_out = control_out.drop(columns=["點類型"])
+            control_out.to_excel(writer, sheet_name="控制點", index=False)
+
+    output.seek(0)
+    return output.getvalue()
+
+
+# ==========================
 # Streamlit App：測量可視化助手
 # ==========================
 
@@ -457,7 +569,7 @@ def main():
         )
 
     st.title("📐 測量可視化助手")
-    st.caption("使用 Excel 計算模板，自動繪製可放大、可旋轉的平面與三維座標圖（含支距法）")
+    st.caption("使用 Excel 計算模板，自動繪製可放大、可旋轉的平面與三維座標圖（含新版支距法）")
 
     # --- 模板下載 ---
     st.subheader("下載 Excel 計算模板")
@@ -487,32 +599,42 @@ def main():
         st.info("請先上傳 Excel 檔案後再進行繪圖。")
         return
 
-    # --- 讀取細部點 ---
+    # --- 自動偵測工作表，取得細部點 & 控制點 ---
     try:
-        detail_df_raw = load_points(uploaded_file, SHEET_DETAIL)
+        detail_df_raw, control_df_raw, detail_name, control_name = auto_detect_sheets(uploaded_file)
+        st.success(f"已偵測到細部點工作表：『{detail_name}』")
+        if control_df_raw is not None and control_name is not None:
+            st.info(f"已偵測到控制點工作表：『{control_name}』")
+        else:
+            st.warning("未偵測到控制點工作表，只使用一張工作表做細部點。")
     except Exception as e:
-        st.error(f"讀取細部點座標失敗：{e}")
+        st.error(f"偵測工作表失敗：{e}")
         return
 
-    # --- 讀取控制點（可選） ---
-    try:
-        control_df_raw = load_points(uploaded_file, SHEET_CONTROL)
-    except Exception:
-        control_df_raw = pd.DataFrame()
-        st.warning("⚠ 未找到控制點工作表或欄位，將只顯示細部點。")
+    # --- 在網站上直接編輯 / 新增點 ---
+    st.subheader("細部點座標表（可直接編輯 / 新增）")
+    detail_df_edit = st.data_editor(
+        detail_df_raw,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="detail_editor"
+    )
 
-    # --- 顯示資料表 ---
-    st.subheader("細部點座標表")
-    st.dataframe(detail_df_raw, use_container_width=True)
+    if control_df_raw is not None:
+        st.subheader("控制點座標表（可直接編輯）")
+        control_df_edit = st.data_editor(
+            control_df_raw,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="control_editor"
+        )
+    else:
+        control_df_edit = None
 
-    if not control_df_raw.empty:
-        st.subheader("控制點座標表")
-        st.dataframe(control_df_raw, use_container_width=True)
-
-    # --- 準備給支距法用的「已分類所有點」 ---
-    detail_classified = classify_detail_points(detail_df_raw) if not detail_df_raw.empty else pd.DataFrame()
-    if not control_df_raw.empty:
-        control_classified = control_df_raw.copy()
+    # --- 準備支距法用的全點集合（已分類） ---
+    detail_classified = classify_detail_points(detail_df_edit) if not detail_df_edit.empty else pd.DataFrame()
+    if control_df_edit is not None and not control_df_edit.empty:
+        control_classified = control_df_edit.copy()
         control_classified["點類型"] = "[控制點]"
     else:
         control_classified = pd.DataFrame()
@@ -527,50 +649,95 @@ def main():
         all_points_for_offset = pd.DataFrame()
 
     st.markdown("---")
-    st.subheader("支距法產生新點")
+    st.subheader("支距法產生新點（新版：兩點距離 + NESW 方向）")
 
-    # 支距法：目前依「細部點座標」的點號做 A、B 選擇
-    point_choices = detail_df_raw[COL_POINT].astype(str).tolist()
-
-    if len(point_choices) < 2:
-        st.info("細部點少於兩點，無法執行支距法。")
+    if all_points_for_offset.empty:
+        st.info("目前沒有可用的點資料，請先在上方輸入或修改細部點 / 控制點座標。")
         offset_df = st.session_state["offset_points"]
     else:
-        col_a, col_b = st.columns(2)
-        with col_a:
-            point_a = st.selectbox("起點 A", point_choices, key="offset_A")
-        with col_b:
-            point_b = st.selectbox("終點 B", point_choices, key="offset_B")
+        point_choices = all_points_for_offset[COL_POINT].astype(str).tolist()
 
-        col_k, col_c = st.columns(2)
-        with col_k:
-            k = st.number_input("K 倍距離", min_value=0.0, value=1.0, step=0.1)
-        with col_c:
-            c = st.number_input("C 次（要生成幾個點）", min_value=1, max_value=100, value=3, step=1)
-
-        if st.button("執行支距法並產生新點"):
-            try:
-                if all_points_for_offset.empty:
-                    st.error("目前沒有可用的點資料供支距法使用。")
-                    offset_df = st.session_state["offset_points"]
-                else:
-                    new_offset = generate_offset_points(all_points_for_offset, point_a, point_b, k, c)
-                    # 新產生的支距點與既有支距點合併，避免覆蓋
-                    offset_df = pd.concat(
-                        [existing_offset, new_offset],
-                        ignore_index=True
-                    )
-                    st.session_state["offset_points"] = offset_df
-                    st.success(f"已從 {point_a} → {point_b} 方向產生 {len(new_offset)} 個支距點。")
-            except Exception as e:
-                st.error(f"支距法計算失敗：{e}")
-                offset_df = st.session_state["offset_points"]
-        else:
+        if len(point_choices) < 2:
+            st.info("點位少於兩點，無法執行支距法。")
             offset_df = st.session_state["offset_points"]
+        else:
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                dist_p1 = st.selectbox("距離基準點 1", point_choices, key="dist_p1")
+            with col_p2:
+                dist_p2 = st.selectbox("距離基準點 2", point_choices, key="dist_p2")
+
+            # 顯示距離
+            try:
+                D_preview = compute_distance(all_points_for_offset, dist_p1, dist_p2)
+                st.write(f"兩點距離 D = **{D_preview:.3f} m**")
+            except Exception as e:
+                st.error(f"距離計算錯誤：{e}")
+                D_preview = None
+
+            col_start, col_dir = st.columns(2)
+            with col_start:
+                start_point = st.selectbox("起始點", point_choices, key="start_point")
+            with col_dir:
+                direction = st.selectbox("方向（NESW）", ["N", "E", "S", "W"], key="direction")
+
+            col_k, col_c = st.columns(2)
+            with col_k:
+                k = st.number_input("K 倍距離", min_value=0.0, value=1.0, step=0.1)
+            with col_c:
+                c = st.number_input("C 次（要生成幾個點）", min_value=1, max_value=100, value=3, step=1)
+
+            if st.button("執行支距法並產生新點"):
+                try:
+                    new_offset = generate_offset_points_directional(
+                        all_points_for_offset,
+                        dist_p1,
+                        dist_p2,
+                        start_point,
+                        direction,
+                        k,
+                        c
+                    )
+                    offset_df = pd.concat([existing_offset, new_offset], ignore_index=True)
+                    st.session_state["offset_points"] = offset_df
+                    st.success(f"已從起始點 {start_point} 向 {direction} 方向，依距離({dist_p1}–{dist_p2}) × {k}，產生 {len(new_offset)} 個支距點。")
+                except Exception as e:
+                    st.error(f"支距法計算失敗：{e}")
+                    offset_df = st.session_state["offset_points"]
+            else:
+                offset_df = st.session_state["offset_points"]
 
     if not st.session_state["offset_points"].empty:
         st.write("目前所有支距法產生的點：")
-        st.dataframe(st.session_state["offset_points"], use_container_width=True)
+        st.data_editor(
+            st.session_state["offset_points"],
+            num_rows="dynamic",
+            use_container_width=True,
+            key="offset_editor"
+        )
+
+    st.markdown("---")
+
+    # --- 標籤篩選：只顯示特定類型 ---
+    # 先生成完整分類，取得所有可能的「點類型」
+    all_types_set = set()
+    if not detail_classified.empty:
+        all_types_set.update(detail_classified["點類型"].unique().tolist())
+    if not control_classified.empty:
+        all_types_set.update(control_classified["點類型"].unique().tolist())
+    if not existing_offset.empty:
+        all_types_set.update(existing_offset["點類型"].unique().tolist())
+
+    all_types_list = sorted(all_types_set)
+    st.subheader("顯示的點類型篩選")
+    if all_types_list:
+        selected_types = st.multiselect(
+            "選擇要顯示的點類型（留空 = 全部顯示）",
+            options=all_types_list,
+            default=all_types_list
+        )
+    else:
+        selected_types = []
 
     st.markdown("---")
 
@@ -580,28 +747,46 @@ def main():
     with col1:
         st.subheader("平面圖 (N–E)")
         fig_plan = plot_plan_interactive(
-            detail_df_raw,
-            control_df_raw,
+            detail_df_edit,
+            control_df_edit,
             offset_df=st.session_state["offset_points"],
             show_labels=show_labels,
+            allowed_types=selected_types
         )
         if fig_plan is None:
-            st.warning("沒有有效的細部點 / 控制點可以繪製平面圖。請確認 N/E 座標有計算完成。")
+            st.warning("沒有符合條件的點可以繪製平面圖。請確認 N/E 座標與標籤篩選。")
         else:
             st.plotly_chart(fig_plan, use_container_width=True)
 
     with col2:
         st.subheader("三維圖 (E–N–H)")
         fig_3d = plot_3d_interactive(
-            detail_df_raw,
-            control_df_raw,
+            detail_df_edit,
+            control_df_edit,
             offset_df=st.session_state["offset_points"],
+            allowed_types=selected_types
         )
         if fig_3d is None:
-            st.warning("沒有有效的細部點 / 控制點可以繪製三維圖。請確認 N/E/H 座標有計算完成。")
+            st.warning("沒有符合條件的點可以繪製三維圖。請確認 N/E/H 座標與標籤篩選。")
         else:
             st.plotly_chart(fig_3d, use_container_width=True)
             st.caption("滑鼠拖曳旋轉、滾輪縮放。預設為 Z 軸朝上的旋轉模式（turntable）。")
+
+    st.markdown("---")
+
+    # --- 匯出 Excel（含目前所有修改 & 支距點） ---
+    st.subheader("匯出目前成果為 Excel")
+    if st.button("產生並下載成果 Excel"):
+        try:
+            excel_bytes = export_to_excel(detail_df_edit, control_df_edit, st.session_state["offset_points"])
+            st.download_button(
+                label="📥 下載成果 Excel",
+                data=excel_bytes,
+                file_name="測量成果_含支距點.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.error(f"匯出 Excel 失敗：{e}")
 
 
 if __name__ == "__main__":
