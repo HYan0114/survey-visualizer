@@ -339,7 +339,7 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
         "點類型": True,
     }
 
-    # 顏色與符號對照（全域定義）
+    # 顏色與符號對照（2D，支援 triangle-up）
     base_color_map = {
         "[控制點]": "#ff8800",  # 橘色
         "[補點]": "#003f7f",   # 深藍
@@ -353,7 +353,7 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
     }
 
     base_symbol_map = {
-        "[控制點]": "triangle-up",  # 橘色三角形
+        "[控制點]": "triangle-up",  # 2D 可以用三角形
         "[補點]": "circle",
         "[建物]": "circle",
         "[道路]": "circle",
@@ -364,7 +364,6 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
         "[細部點]": "circle",
     }
 
-    # 只針對目前實際有的類型做 mapping，避免 plotly 收到奇怪值
     used_types = all_points["點類型"].astype(str).unique().tolist()
     color_map = {t: base_color_map.get(t, "#000000") for t in used_types}
     symbol_map = {t: base_symbol_map.get(t, "circle") for t in used_types}
@@ -377,7 +376,7 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
         symbol="點類型",
         hover_name=COL_POINT,
         hover_data=hover_data,
-        text=COL_POINT,              # 每個點顯示自己點號
+        text=COL_POINT,
         color_discrete_map=color_map,
         symbol_map=symbol_map,
     )
@@ -459,6 +458,8 @@ def plot_3d_interactive(detail_df: pd.DataFrame,
         "點類型": True,
     }
 
+    # 3D 的 symbol 只能用這幾種：circle, circle-open, cross,
+    # diamond, diamond-open, square, square-open, x
     base_color_map = {
         "[控制點]": "#ff8800",
         "[補點]": "#003f7f",
@@ -472,7 +473,7 @@ def plot_3d_interactive(detail_df: pd.DataFrame,
     }
 
     base_symbol_map = {
-        "[控制點]": "triangle-up",
+        "[控制點]": "square-open",  # 3D 用方框代替三角形
         "[補點]": "circle",
         "[建物]": "circle",
         "[道路]": "circle",
