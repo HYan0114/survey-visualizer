@@ -23,8 +23,8 @@ COL_H = "H座標"
 
 def load_points(xls, sheet_name: str) -> pd.DataFrame:
     """
-    從指定工作表讀取三維座標資料
-    xls 可以是上傳的檔案物件（streamlit file_uploader 給的）
+    從指定工作表讀取三維座標資料。
+    xls 可以是上傳的檔案物件（streamlit file_uploader 給的）。
     """
     df = pd.read_excel(xls, sheet_name=sheet_name)
 
@@ -82,12 +82,15 @@ def classify_detail_points(detail_df: pd.DataFrame) -> pd.DataFrame:
 # 命名工具：從 B 點推算下一個編號，不重複
 # ==========================
 
-def infer_naming_style_and_next_indices(base_name: str, all_names: pd.Series, c: int):
+def infer_naming_style_and_next_indices(base_name: str,
+                                        all_names: pd.Series,
+                                        c: int):
     """
     從 B 點點號推斷命名風格：
       - T-1, T-2 -> 產生 T-3, T-4...
       - T1, T2   -> 產生 T3, T4...
     從 all_names 中找出同風格的最大編號，然後連續往後 C 個，保證不重複。
+
     回傳: (style, prefix, [index1, index2, ...])
         style: 'hyphen' 或 'plain'
         prefix: 例如 'T'
@@ -137,9 +140,9 @@ def infer_naming_style_and_next_indices(base_name: str, all_names: pd.Series, c:
     cur = max_idx
     while len(indices) < c:
         cur += 1
-        # 組名，檢查是否重複
         candidate = f"{prefix}-{cur}" if style == "hyphen" else f"{prefix}{cur}"
         if candidate in used_names:
+            # 理論上不會常發生，但還是保險一下
             continue
         indices.append(cur)
         used_names.add(candidate)
@@ -201,6 +204,7 @@ def generate_offset_points(all_points: pd.DataFrame,
     records = []
 
     for idx in indices:
+        # 注意：這裡 factor 依「第幾個新點」排，跟 idx 數字無關
         factor = k * (len(records) + 1)
         Ni = Nb + factor * dN
         Ei = Eb + factor * dE
@@ -306,6 +310,7 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
         symbol="點類型",
         hover_name=COL_POINT,
         hover_data=hover_data,
+        text=COL_POINT,              # 🔹 每個點顯示自己點號
         color_discrete_map=color_map,
         symbol_map=symbol_map,
     )
@@ -321,10 +326,15 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
 
     if show_labels:
         fig.update_traces(
-            text=all_points[COL_POINT],
             textposition="top center",
             textfont=dict(size=9),
             mode="markers+text",
+        )
+    else:
+        # 不顯示文字只保留點
+        fig.update_traces(
+            text=None,
+            mode="markers",
         )
 
     return fig
@@ -416,7 +426,7 @@ def plot_3d_interactive(detail_df: pd.DataFrame,
 
     # 3D 互動設定：
     # - camera.up = Z 軸朝上
-    # - dragmode = "turntable"：類似你說「Z 軸始終向上旋轉」的模式
+    # - dragmode = "turntable"：類似「Z 軸始終向上旋轉」的模式
     fig.update_layout(
         title="三維圖：控制點 + 細部點 + 支距點（可旋轉 / 縮放）",
         scene=dict(
@@ -442,7 +452,9 @@ def main():
     st.set_page_config(page_title="測量可視化助手", layout="wide")
 
     if "offset_points" not in st.session_state:
-        st.session_state["offset_points"] = pd.DataFrame(columns=[COL_POINT, COL_N, COL_E, COL_H, "點類型"])
+        st.session_state["offset_points"] = pd.DataFrame(
+            columns=[COL_POINT, COL_N, COL_E, COL_H, "點類型"]
+        )
 
     st.title("📐 測量可視化助手")
     st.caption("使用 Excel 計算模板，自動繪製可放大、可旋轉的平面與三維座標圖（含支距法）")
@@ -506,10 +518,13 @@ def main():
         control_classified = pd.DataFrame()
 
     existing_offset = st.session_state["offset_points"]
-    all_points_for_offset = pd.concat(
-        [df for df in [detail_classified, control_classified, existing_offset] if not df.empty],
-        ignore_index=True
-    ) if (not detail_classified.empty or not control_classified.empty or not existing_offset.empty) else pd.DataFrame()
+    if not detail_classified.empty or not control_classified.empty or not existing_offset.empty:
+        all_points_for_offset = pd.concat(
+            [df for df in [detail_classified, control_classified, existing_offset] if not df.empty],
+            ignore_index=True
+        )
+    else:
+        all_points_for_offset = pd.DataFrame()
 
     st.markdown("---")
     st.subheader("支距法產生新點")
@@ -564,7 +579,12 @@ def main():
 
     with col1:
         st.subheader("平面圖 (N–E)")
-        fig_plan = plot_plan_interactive(detail_df_raw, control_df_raw, offset_df=st.session_state["offset_points"], show_labels=show_labels)
+        fig_plan = plot_plan_interactive(
+            detail_df_raw,
+            control_df_raw,
+            offset_df=st.session_state["offset_points"],
+            show_labels=show_labels,
+        )
         if fig_plan is None:
             st.warning("沒有有效的細部點 / 控制點可以繪製平面圖。請確認 N/E 座標有計算完成。")
         else:
@@ -572,7 +592,11 @@ def main():
 
     with col2:
         st.subheader("三維圖 (E–N–H)")
-        fig_3d = plot_3d_interactive(detail_df_raw, control_df_raw, offset_df=st.session_state["offset_points"])
+        fig_3d = plot_3d_interactive(
+            detail_df_raw,
+            control_df_raw,
+            offset_df=st.session_state["offset_points"],
+        )
         if fig_3d is None:
             st.warning("沒有有效的細部點 / 控制點可以繪製三維圖。請確認 N/E/H 座標有計算完成。")
         else:
