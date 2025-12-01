@@ -750,7 +750,7 @@ def main():
 
     st.markdown("---")
 
-    # --- 繪圖（左右兩欄，使用 plotly_chart，可以放大） ---
+    # --- 繪圖（左右兩欄，使用 plotly_chart，可以放大 + 可下載圖片） ---
     col1, col2 = st.columns(2)
 
     with col1:
@@ -766,6 +766,17 @@ def main():
             st.warning("沒有符合條件的點可以繪製平面圖。請確認 N/E 座標與標籤篩選。")
         else:
             st.plotly_chart(fig_plan, use_container_width=True)
+            # 下載平面圖 PNG
+            try:
+                plan_png = fig_plan.to_image(format="png", scale=2)
+                st.download_button(
+                    label="📷 下載平面圖 PNG",
+                    data=plan_png,
+                    file_name="plan_view.png",
+                    mime="image/png"
+                )
+            except Exception:
+                st.info("若要啟用圖片下載，請在 requirements.txt 中加入 `kaleido`。")
 
     with col2:
         st.subheader("三維圖 (E–N–H)")
@@ -780,6 +791,17 @@ def main():
         else:
             st.plotly_chart(fig_3d, use_container_width=True)
             st.caption("滑鼠拖曳旋轉、滾輪縮放。預設為 Z 軸朝上的旋轉模式（turntable）。")
+            # 下載三維圖 PNG
+            try:
+                view3d_png = fig_3d.to_image(format="png", scale=2)
+                st.download_button(
+                    label="📷 下載三維圖 PNG",
+                    data=view3d_png,
+                    file_name="view3d.png",
+                    mime="image/png"
+                )
+            except Exception:
+                st.info("若要啟用 3D 圖片下載，請在 requirements.txt 中加入 `kaleido`。")
 
     st.markdown("---")
 
