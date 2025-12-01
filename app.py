@@ -61,7 +61,6 @@ def auto_detect_sheets(xls_file) -> Tuple[pd.DataFrame, Optional[pd.DataFrame], 
     if detail_name is None:
         detail_name = names_list[0]
     if control_name is None and len(names_list) >= 2:
-        # 如果第二張不同於細部點，拿第二張
         if names_list[1] != detail_name:
             control_name = names_list[1]
 
@@ -262,8 +261,6 @@ def generate_offset_points_directional(all_points: pd.DataFrame,
     cur_N, cur_E, cur_H = Ns, Es, Hs
 
     for idx in indices:
-        # 每一個新點，相對起始點的距離 = (已產生點數 + 1) * D * K
-        step_index = len(records) + 1
         step = D * k  # 每一段的長度
         cur_N += uN * step
         cur_E += uE * step
@@ -342,8 +339,8 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
         "點類型": True,
     }
 
-    # 顏色與符號對照
-    color_map = {
+    # 顏色與符號對照（全域定義）
+    base_color_map = {
         "[控制點]": "#ff8800",  # 橘色
         "[補點]": "#003f7f",   # 深藍
         "[建物]": "#4fa3ff",   # 淺藍
@@ -355,7 +352,7 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
         "[細部點]": "#888888", # 未分類細部點
     }
 
-    symbol_map = {
+    base_symbol_map = {
         "[控制點]": "triangle-up",  # 橘色三角形
         "[補點]": "circle",
         "[建物]": "circle",
@@ -366,6 +363,11 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
         "[其他]": "circle",
         "[細部點]": "circle",
     }
+
+    # 只針對目前實際有的類型做 mapping，避免 plotly 收到奇怪值
+    used_types = all_points["點類型"].astype(str).unique().tolist()
+    color_map = {t: base_color_map.get(t, "#000000") for t in used_types}
+    symbol_map = {t: base_symbol_map.get(t, "circle") for t in used_types}
 
     fig = px.scatter(
         all_points,
@@ -457,7 +459,7 @@ def plot_3d_interactive(detail_df: pd.DataFrame,
         "點類型": True,
     }
 
-    color_map = {
+    base_color_map = {
         "[控制點]": "#ff8800",
         "[補點]": "#003f7f",
         "[建物]": "#4fa3ff",
@@ -469,7 +471,7 @@ def plot_3d_interactive(detail_df: pd.DataFrame,
         "[細部點]": "#888888",
     }
 
-    symbol_map = {
+    base_symbol_map = {
         "[控制點]": "triangle-up",
         "[補點]": "circle",
         "[建物]": "circle",
@@ -480,6 +482,10 @@ def plot_3d_interactive(detail_df: pd.DataFrame,
         "[其他]": "circle",
         "[細部點]": "circle",
     }
+
+    used_types = all_points["點類型"].astype(str).unique().tolist()
+    color_map = {t: base_color_map.get(t, "#000000") for t in used_types}
+    symbol_map = {t: base_symbol_map.get(t, "circle") for t in used_types}
 
     fig = px.scatter_3d(
         all_points,
@@ -700,7 +706,10 @@ def main():
                     )
                     offset_df = pd.concat([existing_offset, new_offset], ignore_index=True)
                     st.session_state["offset_points"] = offset_df
-                    st.success(f"已從起始點 {start_point} 向 {direction} 方向，依距離({dist_p1}–{dist_p2}) × {k}，產生 {len(new_offset)} 個支距點。")
+                    st.success(
+                        f"已從起始點 {start_point} 向 {direction} 方向，"
+                        f"依距離({dist_p1}–{dist_p2}) × {k}，產生 {len(new_offset)} 個支距點。"
+                    )
                 except Exception as e:
                     st.error(f"支距法計算失敗：{e}")
                     offset_df = st.session_state["offset_points"]
@@ -719,7 +728,6 @@ def main():
     st.markdown("---")
 
     # --- 標籤篩選：只顯示特定類型 ---
-    # 先生成完整分類，取得所有可能的「點類型」
     all_types_set = set()
     if not detail_classified.empty:
         all_types_set.update(detail_classified["點類型"].unique().tolist())
@@ -776,7 +784,7 @@ def main():
 
     # --- 匯出 Excel（含目前所有修改 & 支距點） ---
     st.subheader("匯出目前成果為 Excel")
-    if st.button("產生並下載成果 Excel"):
+    if st.button("產生並顯示下載按鈕"):
         try:
             excel_bytes = export_to_excel(detail_df_edit, control_df_edit, st.session_state["offset_points"])
             st.download_button(
