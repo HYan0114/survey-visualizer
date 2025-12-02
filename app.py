@@ -6,6 +6,13 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
+# 嘗試偵測是否有安裝 kaleido（給圖檔輸出用）
+try:
+    import kaleido  # noqa: F401
+    HAS_KALEIDO = True
+except ImportError:
+    HAS_KALEIDO = False
+
 
 # ==========================
 # 基本設定：欄位名稱
@@ -185,7 +192,7 @@ def infer_naming_style_and_next_indices(base_name: str,
 
 
 # ==========================
-# 支距法（新邏輯）：以兩點距離 + NESW 方向
+# 支距法：以兩點距離 + NESW 方向
 # ==========================
 
 def compute_distance(all_points: pd.DataFrame, p1: str, p2: str) -> float:
@@ -340,7 +347,7 @@ def plot_plan_interactive(detail_df: pd.DataFrame,
         "點類型": True,
     }
 
-    # 顏色與符號對照（2D，支援 triangle-up）
+    # 顏色與符號對照（2D）
     base_color_map = {
         "[控制點]": "#ff8800",  # 橘色
         "[補點]": "#003f7f",   # 深藍
@@ -502,9 +509,7 @@ def plot_3d_interactive(detail_df: pd.DataFrame,
         symbol_map=symbol_map,
     )
 
-    # 3D 互動設定：
-    # - camera.up = Z 軸朝上
-    # - dragmode = "turntable"：Z 軸向上旋轉
+    # 3D 互動設定
     fig.update_layout(
         title="三維圖：控制點 + 細部點 + 支距點（可旋轉 / 縮放）",
         scene=dict(
@@ -751,7 +756,7 @@ def main():
 
     st.markdown("---")
 
-    # --- 繪圖（左右兩欄，使用 plotly_chart，可以放大 + 可下載圖片） ---
+    # --- 繪圖（左右兩欄，使用 plotly_chart） ---
     col1, col2 = st.columns(2)
 
     with col1:
@@ -763,21 +768,25 @@ def main():
             show_labels=show_labels,
             allowed_types=selected_types
         )
+
         if fig_plan is None:
             st.warning("沒有符合條件的點可以繪製平面圖。請確認 N/E 座標與標籤篩選。")
         else:
             st.plotly_chart(fig_plan, use_container_width=True)
-        # 下載平面圖 PNG
-try:
-    plan_png = fig_plan.to_image(format="png", scale=2)
-    st.download_button(
-        label="📷 下載平面圖 PNG",
-        data=plan_png,
-        file_name="plan_view.png",
-        mime="image/png"
-    )
-except Exception as e:
-    st.error(f"平面圖輸出失敗：{e}")
+
+            if not HAS_KALEIDO:
+                st.info("若要啟用圖片下載，請在 requirements.txt 中加入 `kaleido`。")
+            else:
+                try:
+                    plan_png = fig_plan.to_image(format="png", scale=2)
+                    st.download_button(
+                        label="📷 下載平面圖 PNG",
+                        data=plan_png,
+                        file_name="plan_view.png",
+                        mime="image/png"
+                    )
+                except Exception as e:
+                    st.error(f"平面圖輸出失敗（圖片匯出錯誤）：{e}")
 
     with col2:
         st.subheader("三維圖 (E–N–H)")
@@ -787,23 +796,26 @@ except Exception as e:
             offset_df=st.session_state["offset_points"],
             allowed_types=selected_types
         )
+
         if fig_3d is None:
             st.warning("沒有符合條件的點可以繪製三維圖。請確認 N/E/H 座標與標籤篩選。")
         else:
             st.plotly_chart(fig_3d, use_container_width=True)
             st.caption("滑鼠拖曳旋轉、滾輪縮放。預設為 Z 軸朝上的旋轉模式（turntable）。")
-           # 下載三維圖 PNG
-try:
-    view3d_png = fig_3d.to_image(format="png", scale=2)
-    st.download_button(
-        label="📷 下載三維圖 PNG",
-        data=view3d_png,
-        file_name="view3d.png",
-        mime="image/png"
-    )
-except Exception as e:
-    st.error(f"三維圖輸出失敗：{e}")
 
+            if not HAS_KALEIDO:
+                st.info("若要啟用 3D 圖片下載，請在 requirements.txt 中加入 `kaleido`。")
+            else:
+                try:
+                    view3d_png = fig_3d.to_image(format="png", scale=2)
+                    st.download_button(
+                        label="📷 下載三維圖 PNG",
+                        data=view3d_png,
+                        file_name="view3d.png",
+                        mime="image/png"
+                    )
+                except Exception as e:
+                    st.error(f"三維圖輸出失敗（圖片匯出錯誤）：{e}")
 
     st.markdown("---")
 
@@ -824,6 +836,3 @@ except Exception as e:
 
 if __name__ == "__main__":
     main()
-
-
-
