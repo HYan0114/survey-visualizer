@@ -6,13 +6,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# 嘗試偵測是否有安裝 kaleido（給圖檔輸出用）
-try:
-    import kaleido  # noqa: F401
-    HAS_KALEIDO = True
-except ImportError:
-    HAS_KALEIDO = False
-
 
 # ==========================
 # 基本設定：欄位名稱
@@ -163,13 +156,13 @@ def infer_naming_style_and_next_indices(base_name: str,
     existing_indices = []
 
     if style == "hyphen":
-        pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)$")
+        pattern = re.compile(r"^" + re.escape(prefix) + r"-(\d+)$")
         for s in all_names_str:
             m = pattern.match(s)
             if m:
                 existing_indices.append(int(m.group(1)))
     else:  # plain
-        pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$")
+        pattern = re.compile(r"^" + re.escape(prefix) + r"(\d+)$")
         for s in all_names_str:
             m = pattern.match(s)
             if m:
@@ -466,8 +459,6 @@ def plot_3d_interactive(detail_df: pd.DataFrame,
         "點類型": True,
     }
 
-    # 3D 的 symbol 只能用這幾種：circle, circle-open, cross,
-    # diamond, diamond-open, square, square-open, x
     base_color_map = {
         "[控制點]": "#ff8800",
         "[補點]": "#003f7f",
@@ -480,6 +471,8 @@ def plot_3d_interactive(detail_df: pd.DataFrame,
         "[細部點]": "#888888",
     }
 
+    # 3D 的 symbol 只能用這幾種：circle, circle-open, cross,
+    # diamond, diamond-open, square, square-open, x
     base_symbol_map = {
         "[控制點]": "square-open",  # 3D 用方框代替三角形
         "[補點]": "circle",
@@ -756,7 +749,7 @@ def main():
 
     st.markdown("---")
 
-    # --- 繪圖（左右兩欄，使用 plotly_chart） ---
+    # --- 繪圖（左右兩欄，使用 plotly_chart，開啟工具列下載按鈕） ---
     col1, col2 = st.columns(2)
 
     with col1:
@@ -772,21 +765,18 @@ def main():
         if fig_plan is None:
             st.warning("沒有符合條件的點可以繪製平面圖。請確認 N/E 座標與標籤篩選。")
         else:
-            st.plotly_chart(fig_plan, use_container_width=True)
-
-            if not HAS_KALEIDO:
-                st.info("若要啟用圖片下載，請在 requirements.txt 中加入 `kaleido`。")
-            else:
-                try:
-                    plan_png = fig_plan.to_image(format="png", scale=2)
-                    st.download_button(
-                        label="📷 下載平面圖 PNG",
-                        data=plan_png,
-                        file_name="plan_view.png",
-                        mime="image/png"
-                    )
-                except Exception as e:
-                    st.error(f"平面圖輸出失敗（圖片匯出錯誤）：{e}")
+            st.plotly_chart(
+                fig_plan,
+                use_container_width=True,
+                config={
+                    "toImageButtonOptions": {
+                        "format": "png",
+                        "filename": "plan_view",
+                        "scale": 2
+                    }
+                }
+            )
+            st.caption("💡 右上角工具列可使用「Download plot as png」下載平面圖。")
 
     with col2:
         st.subheader("三維圖 (E–N–H)")
@@ -800,22 +790,18 @@ def main():
         if fig_3d is None:
             st.warning("沒有符合條件的點可以繪製三維圖。請確認 N/E/H 座標與標籤篩選。")
         else:
-            st.plotly_chart(fig_3d, use_container_width=True)
-            st.caption("滑鼠拖曳旋轉、滾輪縮放。預設為 Z 軸朝上的旋轉模式（turntable）。")
-
-            if not HAS_KALEIDO:
-                st.info("若要啟用 3D 圖片下載，請在 requirements.txt 中加入 `kaleido`。")
-            else:
-                try:
-                    view3d_png = fig_3d.to_image(format="png", scale=2)
-                    st.download_button(
-                        label="📷 下載三維圖 PNG",
-                        data=view3d_png,
-                        file_name="view3d.png",
-                        mime="image/png"
-                    )
-                except Exception as e:
-                    st.error(f"三維圖輸出失敗（圖片匯出錯誤）：{e}")
+            st.plotly_chart(
+                fig_3d,
+                use_container_width=True,
+                config={
+                    "toImageButtonOptions": {
+                        "format": "png",
+                        "filename": "view3d",
+                        "scale": 2
+                    }
+                }
+            )
+            st.caption("💡 右上角工具列可使用「Download plot as png」下載三維圖。")
 
     st.markdown("---")
 
