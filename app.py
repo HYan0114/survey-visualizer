@@ -5,8 +5,6 @@ from typing import Dict, Tuple, Optional, List
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import pkg_resources
-print([p.project_name for p in pkg_resources.working_set])
 
 
 # ==========================
@@ -825,4 +823,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
